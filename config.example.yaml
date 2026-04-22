@@ -5,6 +5,11 @@
 #
 # Then edit config.yaml with your actual file paths.
 
+# Output directory (optional, default: "results")
+# All workflow outputs land under this directory in subdirs
+# (hifi/, cifi/, asm/, porec/, yahs/, qc_porec/, jbat/, stats/, ...).
+output_dir: results
+
 # Sample definitions (required)
 # -----------------------------
 # Define one or more samples to process. Each sample needs:
@@ -25,13 +30,28 @@
 
 samples:
   my_sample:
-    hifi_bam: /path/to/hifi_reads.bam
-    cifi: /path/to/cifi_reads.bam
+    hifi_bam: /path/to/hifi_reads.bam        # OR use `hifi_fasta:` (see below)
+    # hifi_fasta: /path/to/hifi.fa.gz        # pre-built HiFi FASTA/FASTA.GZ;
+    #                                        # skips BAM->FASTA conversion and
+    #                                        # cannot be combined with hifi.downsample.
+    cifi: /path/to/cifi_reads.bam            # BAM, FASTQ, or FASTA (gzipped OK)
     enzyme: HindIII
     # Optional: custom restriction site instead of a named enzyme.
     # If set, `site` + `cut_pos` override `enzyme` for cifi qc/digest.
     # site: "GANTC"    # IUPAC recognition sequence
     # cut_pos: 1       # 0-based cut position within the site
+    #
+    # Optional: pre-downsampled CiFi inputs (external mode).
+    # Each label maps to a BAM / FASTQ / FASTA (gzipped OK) that the pipeline
+    # feeds in as-is (FASTQ/FASTA are wrapped into a BAM via `samtools import`).
+    # Keys become `{label}` in output paths (must match [A-Za-z0-9._-]+). The
+    # `cifi:` above is still required (used only for `cifi_qc`). Cannot be
+    # combined with dilution.enabled or hifi.downsample.enabled. If multiple
+    # samples are defined, every sample must declare the same label set.
+    # cifi_external:
+    #   c10: /path/to/cifi.10pct.bam
+    #   c25: /path/to/cifi.25pct.fa.gz
+    #   c100: /path/to/cifi.bam
 
 cifi:
   qc:
@@ -43,6 +63,30 @@ cifi:
     strip_overhang: true
     gzip: false
     fast: false
+
+# HiFi downsampling (optional)
+# -----------------------------
+# When enabled, the pipeline produces a downsampled HiFi BAM (and FASTA)
+# alongside the existing CiFi dilution. Two modes:
+#
+#   mode: depth     -> compute fraction from haploid genome size + target X
+#                      coverage. Requires hifi.downsample.genome_size.
+#                      depths: list of target X (e.g. [5, 10, 30] -> labels h5X..)
+#
+#   mode: fraction  -> direct percentages of total HiFi reads, like dilution.
+#                      percentages: list of % (e.g. [20, 50] -> labels h20pct..)
+#
+# When BOTH hifi.downsample.enabled and dilution.enabled are true, the lists
+# are zipped pairwise (must be the same length) and labels look like
+# "h10X_c20", "h30X_c50", ...
+
+hifi:
+  downsample:
+    enabled: false
+    mode: depth                  # "depth" | "fraction"
+    genome_size: 2500000000      # bp (haploid). Required when mode == "depth"
+    depths:      [5, 10, 30]     # target X coverage  (mode == "depth")
+    percentages: [20, 50]        # % of total reads   (mode == "fraction")
 
 # CiFi dilution settings (optional)
 # ---------------------------------

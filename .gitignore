@@ -1,18 +1,19 @@
-stats/
-asm/
-logs/
-porec/
-refs/
-tmp/
-work/
-cifi/
-cifi2pe/
-hifi/
-yahs/
-qc_porec/
-qc_cifi/
-jbat/
+# Pipeline outputs (everything lands under results/ by default)
 results/
+results.*/
+apr7_backup/
+
+# Snakemake state
 .snakemake/
+
+# Local config (copied from config.example.yaml)
 config.yaml
+
+# Tool downloads
 *.jar
+
+# Misc workdirs
+work/
+tmp/
+logs/
+refs/

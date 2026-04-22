@@ -4,7 +4,7 @@ A Snakemake pipeline for generating chromosome-scale, phased de novo assemblies 
 
 ## Overview
 
-This pipeline takes HiFi and CiFi reads (BAM or FASTQ) as input and produces haplotype-resolved, scaffold-level assemblies with QC metrics, contact maps, and editable `.hic` files for manual curation in Juicebox.
+This pipeline takes HiFi reads (BAM or pre-built FASTA) and CiFi reads (BAM, FASTQ, or FASTA) as input and produces haplotype-resolved, scaffold-level assemblies with QC metrics, contact maps, and editable `.hic` files for manual curation in Juicebox.
 
 
 ## Workflow Diagram
@@ -47,17 +47,77 @@ cp config.example.yaml config.yaml
 ```yaml
 samples:
   my_sample:
-    hifi_bam: /path/to/hifi_reads.bam      # PacBio HiFi reads
-    cifi: /path/to/cifi_reads.bam           # CiFi reads (BAM or FASTQ/FASTQ.GZ)
-    enzyme: HindIII                         # Restriction enzyme (HindIII, DpnII, NlaIII)
+    hifi_bam: /path/to/hifi_reads.bam      # PacBio HiFi reads (BAM)
+    # OR, instead of hifi_bam:
+    # hifi_fasta: /path/to/hifi.fa.gz      # pre-built HiFi FASTA (.fa / .fa.gz);
+    #                                      # skips BAM->FASTA conversion and is
+    #                                      # incompatible with hifi.downsample.
+    cifi: /path/to/cifi_reads.bam          # CiFi reads (BAM, FASTQ, or FASTA; .gz OK)
+    enzyme: HindIII                        # Restriction enzyme (HindIII, DpnII, NlaIII, ...)
+    # Optional: custom restriction site instead of a named enzyme.
+    # site: "GANTC"                         # IUPAC recognition sequence
+    # cut_pos: 1                            # 0-based cut position within the site
 ```
+Exactly one of `hifi_bam:` or `hifi_fasta:` must be set per sample.
 
-### Dilution (optional)
+### Output directory (optional, default `results`)
+```yaml
+output_dir: results
+```
+All pipeline outputs land under this directory in their existing subdir
+structure. Set to a different path to write elsewhere.
+
+### Downsampling (optional)
+
+Three independent ways to downsample reads. Each scenario shows up as a
+single `{label}` value in output paths.
+
+**CiFi-only sweep (existing, unchanged):**
 ```yaml
 dilution:
-  enabled: false                    # Use 100% CiFi reads
-  percentages: [20, 40, 60, 80, 100]  # Or test multiple coverage levels
+  enabled: false                       # use 100% CiFi reads
+  percentages: [20, 40, 60, 80, 100]   # or sweep across coverage levels
 ```
+Labels are the numeric percentages: `20`, `40`, `100`, ...
+
+**HiFi-only sweep (new):**
+```yaml
+hifi:
+  downsample:
+    enabled: true
+    mode: depth                  # "depth" | "fraction"
+    genome_size: 2500000000      # bp (haploid). Required for depth mode.
+    depths:      [5, 10, 30]     # target X coverage  (depth mode)
+    percentages: [20, 50]        # % of total reads   (fraction mode)
+```
+Depth-mode labels look like `h5X`, `h10X`, `h30X`. Fraction-mode labels look
+like `h20pct`, `h50pct`. The pipeline computes the per-sample fraction from
+each sample's actual HiFi base count via `samtools stats` (cached on disk).
+
+**HiFi + CiFi together (zip):** when both `hifi.downsample.enabled` and
+`dilution.enabled` are `true`, the lists are paired index-wise (must be the
+same length). Labels combine both: `h5X_c20`, `h10X_c50`, ...
+
+**Pre-downsampled CiFi (external):** when you already have one or more
+downsampled CiFi inputs and don't want the pipeline to re-sample, declare
+them per-sample under `cifi_external`:
+```yaml
+samples:
+  my_sample:
+    hifi_bam: /data/hifi.bam
+    cifi: /data/cifi.bam          # still required, used only for cifi_qc
+    cifi_external:
+      c10:  /data/cifi.10pct.bam
+      c25:  /data/cifi.25pct.fa.gz
+      c100: /data/cifi.bam
+    enzyme: HindIII
+```
+Each entry may be BAM, FASTQ, or FASTA (gzipped or not). BAMs are symlinked
+in; FASTQ/FASTA are wrapped into an unmapped BAM via `samtools import`. No
+re-sampling happens. Each key becomes a `{label}` in the output paths (must
+match `[A-Za-z0-9._-]+`). Cannot be combined with `dilution.enabled` or
+`hifi.downsample.enabled`. When multiple samples are defined, every sample
+must declare the same label set.
 
 ### Tool Paths
 ```yaml
@@ -92,7 +152,7 @@ slurm:
 ## Running
 
 ```bash
-conda activate vole
+conda activate cifiasm
 
 # Dry run (validate DAG)
 snakemake --dry-run
@@ -104,57 +164,67 @@ snakemake --cores 32
 snakemake --cores 32 --slurm
 
 # Run specific target
-snakemake stats/my_sample/100/summary.tsv         # contig stats only
-snakemake stats/my_sample/100/yahs_summary.tsv    # scaffold stats only
+snakemake results/stats/my_sample/100/summary.tsv         # contig stats only
+snakemake results/stats/my_sample/100/yahs_summary.tsv    # scaffold stats only
 ```
 
 
 ## Output Files
 
+All pipeline outputs land under a single directory (default: `results/`).
+Override with `output_dir: /some/other/path` in `config.yaml`. The label
+`{label}` encodes the downsampling scenario (e.g. `100`, `h10X`, `h10X_c20`).
+
 ```
-cifi_assembly/
+results/
 ├── qc_cifi/{sample}/
 │   └── qc.pdf                            # CiFi QC report
 ├── hifi/
-│   └── {sample}.hifi.fa                  # HiFi reads as FASTA
+│   ├── {sample}.{label}.hifi.bam         # (down)sampled HiFi BAM (only when hifi_bam is set)
+│   └── {sample}.{label}.hifi.fa          # HiFi FASTA fed to hifiasm
 ├── cifi/
-│   └── {sample}.{pct}.bam               # Downsampled CiFi BAM
+│   └── {sample}.{label}.{bam,bam.bai}    # per-label CiFi BAM
 ├── cifi2pe/
-│   └── {sample}.{pct}_R{1,2}.fastq      # Hi-C-like paired reads
-├── asm/{sample}/{pct}/
-│   ├── *.hic.hap{1,2}.p_ctg.gfa         # hifiasm contigs (GFA)
-│   └── *.hap{1,2}.fa                    # Contigs (FASTA)
-├── porec/{sample}/{pct}/hap{1,2}/
-│   ├── *.bed                            # Pore-C contacts
-│   ├── *.pairs.gz                       # Contact pairs
-│   ├── *.mcool                          # Multi-resolution contact matrix
-│   └── *.hic                            # Hi-C contact map
-├── yahs/{sample}/{pct}/
-│   ├── *_scaffolds_final.fa             # Final scaffolds
-│   └── *_scaffolds_final.agp            # Scaffold AGP
-├── qc_porec/{sample}/{pct}/hap{1,2}/
-│   ├── *.hic                            # QC contact map
-│   └── *.cs.bam                         # Aligned CiFi reads
-├── jbat/{sample}/{pct}/hap{1,2}/
-│   ├── *.hic                            # Editable Hi-C map for Juicebox
-│   ├── *.assembly                       # Assembly file for JBAT
-│   └── merged_nodups.txt                # Contact data (3D-DNA format)
-└── stats/{sample}/{pct}/
-    ├── summary.tsv                      # Contig assembly stats
-    └── yahs_summary.tsv                 # Scaffold stats
+│   └── {sample}.{label}_R{1,2}.fastq     # Hi-C-like paired reads (from cifi digest)
+├── asm/{sample}/{label}/
+│   ├── *.hic.hap{1,2}.p_ctg.gfa          # hifiasm contigs (GFA)
+│   └── *.hap{1,2}.fa                     # Contigs (FASTA)
+├── porec/{sample}/{label}/hap{1,2}/
+│   ├── bed/*.bed                         # Pore-C contacts
+│   ├── pairs/*.pairs.gz                  # Contact pairs
+│   ├── pairs/*.mcool                     # Multi-resolution contact matrix
+│   ├── hi-c/*.hic                        # Hi-C contact map
+│   └── wf-pore-c-report.html             # wf-pore-c HTML report
+├── yahs/{sample}/{label}/
+│   ├── *_scaffolds_final.fa              # Final scaffolds
+│   └── *_scaffolds_final.agp             # Scaffold AGP
+├── qc_porec/{sample}/{label}/hap{1,2}/
+│   ├── bed/*.bed
+│   ├── pairs/{*.pairs.gz,*.mcool}
+│   ├── hi-c/*.hic                        # QC contact map
+│   ├── bams/*.cs.bam                     # Aligned CiFi reads (coordinate-sorted)
+│   ├── paired_end/*.ns.bam               # Name-sorted paired BAM (feeds JBAT)
+│   └── wf-pore-c-report.html
+├── jbat/{sample}/{label}/hap{1,2}/
+│   ├── *.hic                             # Editable Hi-C map for Juicebox
+│   ├── *.assembly                        # Assembly file for JBAT
+│   └── merged_nodups.txt                 # Contact data (3D-DNA format)
+└── stats/{sample}/{label}/
+    ├── summary.tsv                       # Contig assembly stats
+    └── yahs_summary.tsv                  # Scaffold stats
 ```
 
 ## Manual Curation with JBAT
 
 After the pipeline completes, use Juicebox Assembly Tools for manual curation:
 
-1. Open `jbat/{sample}/{pct}/hap{hap}/{sample}.{pct}.hap{hap}.hic` in [Juicebox](https://github.com/aidenlab/Juicebox)
+1. Open `results/jbat/{sample}/{label}/hap{hap}/{sample}.{label}.hap{hap}.hic` in [Juicebox](https://github.com/aidenlab/Juicebox)
 2. Load the `.assembly` file via **Assembly > Import Map Assembly**
 3. Review and correct scaffold joins/orientations
-4. Export the corrected assembly as `{sample}.{pct}.hap{hap}.review.assembly`
+4. Export the corrected assembly as `{sample}.{label}.hap{hap}.review.assembly`
 5. Run the post-review rule to generate the final FASTA:
    ```bash
-   snakemake jbat/{sample}/{pct}/hap{hap}/{sample}.{pct}.hap{hap}.FINAL.fa
+   snakemake results/jbat/{sample}/{label}/hap{hap}/{sample}.{label}.hap{hap}.FINAL.fa
    ```
 
 
@@ -163,10 +233,11 @@ After the pipeline completes, use Juicebox Assembly Tools for manual curation:
 | Rule | Description |
 |------|-------------|
 | `cifi_qc` | QC report on raw CiFi input (via `cifi qc`) |
-| `cifi_fastq_to_bam` | Convert CiFi FASTQ to BAM (if needed) |
-| `hifi_fasta` | Convert HiFi BAM to FASTA |
-| `downsample_cifi_bam` | Downsample CiFi reads to target percentage |
-| `cifi_fastq_from_downsampled_bam` | Extract FASTQ from CiFi BAM |
+| `cifi_fastq_to_bam` | Wrap canonical CiFi FASTQ/FASTA into an unmapped BAM (when `cifi:` is not a BAM) |
+| `downsample_hifi_bam` | (Down)sample HiFi BAM to a label-specific copy (skipped when `hifi_fasta:` is set) |
+| `hifi_fasta` | Produce per-label HiFi FASTA: `samtools fasta` from BAM, or symlink/gunzip from `hifi_fasta:` |
+| `downsample_cifi_bam` | Produce per-label CiFi BAM — BAM input sampled or symlinked, FASTQ/FASTA imported via `samtools import` |
+| `cifi_fastq_from_downsampled_bam` | Extract FASTQ from per-label CiFi BAM |
 | `cifi2pe_split` | Digest CiFi reads into Hi-C-like PE reads (via `cifi digest`) |
 | `hifiasm_dual_scaf` | Assemble with hifiasm --dual-scaf |
 | `gfa2fa` | Convert GFA to FASTA |
