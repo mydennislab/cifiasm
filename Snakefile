@@ -1,7 +1,5 @@
 import os
 import re
-import subprocess
-import sys
 
 configfile: "config.yaml"
 
@@ -19,25 +17,61 @@ def seeddotfrac_from_fraction(frac: float, seed: int = 100) -> str:
     frac_digits = f"{frac:.10f}".split(".")[1].rstrip("0") or "0"
     return f"{seed}.{frac_digits}"
 
+# Input-type detection (used at parse time and by the merge rules)
+_FASTQ_EXTS = (".fastq", ".fq", ".fastq.gz", ".fq.gz")
+_FASTA_EXTS = (".fasta", ".fa", ".fasta.gz", ".fa.gz")
+
+def _as_list(x):
+    """Normalize a config value to a list of strings (scalar -> [scalar], falsy -> [])."""
+    if not x:
+        return []
+    return [str(p) for p in x] if isinstance(x, (list, tuple)) else [str(x)]
+
+def _classify_input(path):
+    """Classify an input path by extension: 'bam' | 'fastq' | 'fasta'."""
+    p = str(path).lower()
+    if p.endswith(".bam"):
+        return "bam"
+    if p.endswith(_FASTQ_EXTS):
+        return "fastq"
+    if p.endswith(_FASTA_EXTS):
+        return "fasta"
+    raise ValueError(f"Unrecognized input extension (need BAM/FASTQ/FASTA): {path}")
+
 # Build sample list from config
 SAMPLES = []
 for sample_name, sample_data in config["samples"].items():
-    # HiFi: accept either a BAM (`hifi_bam`) OR a pre-built FASTA (`hifi_fasta`).
-    # Exactly one is required. FASTA skips the BAM -> samtools fasta conversion.
-    hifi_bam_path   = sample_data.get("hifi_bam", "")
-    hifi_fasta_path = sample_data.get("hifi_fasta", "")
-    if bool(hifi_bam_path) == bool(hifi_fasta_path):
+    # HiFi: unified `hifi:` key accepts a single path or a list of BAM/FASTQ/FASTA
+    # files (e.g. multiple SMRT cells), auto-detected by extension. Legacy
+    # `hifi_bam:` / `hifi_fasta:` are still accepted as aliases. All files are
+    # passed to hifiasm as-is (it reads multiple inputs natively); the only
+    # conversion is BAM -> FASTQ, since hifiasm cannot read BAM.
+    hifi_files = (_as_list(sample_data.get("hifi"))
+                  + _as_list(sample_data.get("hifi_bam"))
+                  + _as_list(sample_data.get("hifi_fasta")))
+    if not hifi_files:
         raise ValueError(
-            f"Sample '{sample_name}': exactly one of `hifi_bam` or `hifi_fasta` "
-            f"must be set (got hifi_bam={hifi_bam_path!r}, hifi_fasta={hifi_fasta_path!r})."
+            f"Sample '{sample_name}': no HiFi input found. Set `hifi:` "
+            f"(a path or list of BAM/FASTQ/FASTA files)."
         )
-    # CiFi: accept either "cifi_bam" or "cifi" key (BAM, FASTQ, or FASTA)
-    cifi_path = sample_data.get("cifi", sample_data.get("cifi_bam", ""))
+    for p in hifi_files:
+        _classify_input(p)  # validate extension early
+
+    # CiFi: unified `cifi:` key (legacy alias `cifi_bam:`), single path or list of
+    # BAM/FASTQ/FASTA files. All are merged into a single BAM before digest/QC.
+    cifi_files = _as_list(sample_data.get("cifi") or sample_data.get("cifi_bam"))
+    if not cifi_files:
+        raise ValueError(
+            f"Sample '{sample_name}': no CiFi input found. Set `cifi:` "
+            f"(a path or list of BAM/FASTQ/FASTA files)."
+        )
+    for p in cifi_files:
+        _classify_input(p)  # validate extension early
+
     SAMPLES.append(dict(
         sample=sample_name,
-        hifi_bam=hifi_bam_path,
-        hifi_fasta=hifi_fasta_path,
-        cifi_input=cifi_path,
+        hifi_files=hifi_files,
+        cifi_files=cifi_files,
         enzyme=sample_data.get("enzyme", ""),
         site=sample_data.get("site", ""),
         cut_pos=sample_data.get("cut_pos", ""),
@@ -71,31 +105,9 @@ def get_digest_extra_flags():
         flags.append("--fast")
     return " ".join(flags)
 
-_FASTQ_EXTS = (".fastq", ".fq", ".fastq.gz", ".fq.gz")
-_FASTA_EXTS = (".fasta", ".fa", ".fasta.gz", ".fa.gz")
-
-def _path_is_bam(path):
-    return str(path).lower().endswith(".bam")
-
-def _path_is_fastx(path):
-    """True for FASTQ/FASTA (gzipped or not) — anything `samtools import` accepts."""
-    p = str(path).lower()
-    return p.endswith(_FASTQ_EXTS) or p.endswith(_FASTA_EXTS)
-
-def cifi_is_fastq(sample_name):
-    """True if the canonical CiFi input needs conversion to BAM (FASTQ or FASTA)."""
-    path = get_sample_data(sample_name)["cifi_input"]
-    return _path_is_fastx(path)
-
-def hifi_input_is_fasta(sample_name):
-    """True if the sample uses `hifi_fasta:` (skip BAM->FASTA conversion)."""
-    return bool(get_sample_data(sample_name)["hifi_fasta"])
-
 def _canonical_cifi_bam_path(sample_name: str) -> str:
-    """Upstream CiFi BAM: the original if BAM, else the fastq->bam conversion target."""
-    if cifi_is_fastq(sample_name):
-        return OUTDIR + f"/cifi/{sample_name}.from_fastq.bam"
-    return get_sample_data(sample_name)["cifi_input"]
+    """Upstream CiFi BAM: the per-sample merged BAM (built by `merge_cifi`)."""
+    return OUTDIR + f"/cifi/merged/{sample_name}.cifi.bam"
 
 def get_cifi_bam(wildcards):
     """Return the upstream CiFi BAM for `downsample_cifi_bam` at this (sample, label).
@@ -129,43 +141,15 @@ SLURM_PARTITION = config.get("slurm", {}).get("partition", "low")
 SLURM_ACCOUNT = config.get("slurm", {}).get("account", "publicgrp")
 
 # ============================================================================
-# BAM stats helpers (cached to disk so parse-time stays cheap)
-# ============================================================================
-
-def _bam_cache_path(bam_path: str, suffix: str) -> str:
-    return f"{bam_path}.{suffix}"
-
-def _cache_is_fresh(cache: str, source: str) -> bool:
-    return (os.path.exists(cache)
-            and os.path.exists(source)
-            and os.path.getmtime(cache) >= os.path.getmtime(source))
-
-def get_bam_total_bases(bam_path: str) -> int:
-    """Return total sequence length (bp) of all reads in a BAM, with caching."""
-    cache = _bam_cache_path(bam_path, "stats.bases")
-    if _cache_is_fresh(cache, bam_path):
-        return int(open(cache).read().strip())
-    out = subprocess.check_output(["samtools", "stats", bam_path], text=True)
-    total = 0
-    for line in out.splitlines():
-        if line.startswith("SN\ttotal length:"):
-            total = int(line.split("\t")[2])
-            break
-    if total == 0:
-        raise RuntimeError(f"samtools stats produced no 'total length' for {bam_path}")
-    with open(cache, "w") as fh:
-        fh.write(str(total))
-    return total
-
-# ============================================================================
-# Scenario computation: HiFi/CiFi downsampling sweep
+# Scenario computation: CiFi downsampling sweep
 #
-# A "scenario" is a (label, hifi_frac, cifi_frac) triple. The whole pipeline
-# runs once per scenario. SCENARIOS is built once at parse time from config.
-# Per-sample fractions are stored in PER_SAMPLE_FRACS keyed by (label, sample).
+# A "scenario" is a (label, cifi_frac) pair. The whole pipeline runs once per
+# scenario. SCENARIOS is built once at parse time from config. Per-sample CiFi
+# fractions are stored in PER_SAMPLE_FRACS keyed by (label, sample). HiFi is
+# never downsampled — all HiFi cells are passed to hifiasm as-is.
 # ============================================================================
 
-# (label, sample) -> (hifi_frac, cifi_frac)
+# (label, sample) -> cifi_frac
 PER_SAMPLE_FRACS: dict = {}
 
 # (label, sample) -> pre-downsampled CiFi BAM path (only populated in external mode).
@@ -174,48 +158,8 @@ PER_SAMPLE_FRACS: dict = {}
 # (which triggers the symlink shortcut — no re-sampling).
 PER_SAMPLE_CIFI_SRC: dict = {}
 
-def _fmt_num(x) -> str:
-    """Render an int or float without trailing zeros (e.g. 5 -> '5', 5.5 -> '5.5')."""
-    if isinstance(x, int):
-        return str(x)
-    if float(x).is_integer():
-        return str(int(x))
-    return str(x).rstrip("0").rstrip(".") or "0"
-
-def _depth_to_fraction(depth_x: float, genome_size_bp: int, total_bases: int) -> float:
-    target = depth_x * genome_size_bp
-    if target >= total_bases:
-        sys.stderr.write(
-            f"[cifiasm] WARNING: requested depth {depth_x}X needs {target} bp but BAM "
-            f"has {total_bases} bp; clamping HiFi fraction to 1.0\n"
-        )
-        return 1.0
-    return target / total_bases
-
-def _hifi_value_label(hifi_cfg: dict, val) -> str:
-    if hifi_cfg.get("mode") == "depth":
-        return f"h{_fmt_num(val)}X"
-    return f"h{_fmt_num(val)}pct"
-
-def _hifi_value_to_frac(hifi_cfg: dict, val, sample_dict) -> float:
-    if hifi_cfg.get("mode") == "depth":
-        gs = hifi_cfg.get("genome_size")
-        if gs is None:
-            raise ValueError(
-                "hifi.downsample.mode == 'depth' requires hifi.downsample.genome_size (bp)"
-            )
-        total = get_bam_total_bases(sample_dict["hifi_bam"])
-        return _depth_to_fraction(float(val), int(gs), int(total))
-    # fraction mode
-    return float(val) / 100.0
-
-def _hifi_values(hifi_cfg: dict):
-    if hifi_cfg.get("mode") == "depth":
-        return list(hifi_cfg.get("depths", []))
-    return list(hifi_cfg.get("percentages", []))
-
 def _scenarios_default():
-    return [{"label": "100", "hifi_frac": 1.0, "cifi_frac": 1.0}]
+    return [{"label": "100", "cifi_frac": 1.0}]
 
 def _scenarios_cifi_only(dil_cfg: dict, samples: list):
     out = []
@@ -223,21 +167,8 @@ def _scenarios_cifi_only(dil_cfg: dict, samples: list):
         label = str(pct)
         cfrac = float(pct) / 100.0
         for s in samples:
-            PER_SAMPLE_FRACS[(label, s["sample"])] = (1.0, cfrac)
-        out.append({"label": label, "hifi_frac": 1.0, "cifi_frac": cfrac})
-    return out
-
-def _scenarios_hifi_only(hifi_cfg: dict, samples: list):
-    out = []
-    for v in _hifi_values(hifi_cfg):
-        label = _hifi_value_label(hifi_cfg, v)
-        # store per-sample fracs (depth mode is sample-specific)
-        last_frac = 1.0
-        for s in samples:
-            hf = _hifi_value_to_frac(hifi_cfg, v, s)
-            PER_SAMPLE_FRACS[(label, s["sample"])] = (hf, 1.0)
-            last_frac = hf
-        out.append({"label": label, "hifi_frac": last_frac, "cifi_frac": 1.0})
+            PER_SAMPLE_FRACS[(label, s["sample"])] = cfrac
+        out.append({"label": label, "cifi_frac": cfrac})
     return out
 
 def _scenarios_cifi_external(samples: list):
@@ -276,86 +207,49 @@ def _scenarios_cifi_external(samples: list):
             )
         for s in samples:
             path = s["cifi_external"][label]
-            if not (_path_is_bam(path) or _path_is_fastx(path)):
+            try:
+                _classify_input(path)
+            except ValueError:
                 raise ValueError(
                     f"cifi_external['{label}'] for sample '{s['sample']}' must be "
                     f"a BAM, FASTQ, or FASTA file; got '{path}'."
                 )
             PER_SAMPLE_CIFI_SRC[(label, s["sample"])] = path
-            PER_SAMPLE_FRACS[(label, s["sample"])] = (1.0, 1.0)
-        out.append({"label": label, "hifi_frac": 1.0, "cifi_frac": 1.0})
-    return out
-
-def _scenarios_zip(hifi_cfg: dict, dil_cfg: dict, samples: list):
-    h_values = _hifi_values(hifi_cfg)
-    c_values = list(dil_cfg["percentages"])
-    if len(h_values) != len(c_values):
-        raise ValueError(
-            f"zip mode requires equal-length lists, got "
-            f"hifi.downsample ({len(h_values)}) and dilution.percentages ({len(c_values)})"
-        )
-    out = []
-    for hv, cv in zip(h_values, c_values):
-        label = f"{_hifi_value_label(hifi_cfg, hv)}_c{_fmt_num(cv)}"
-        cfrac = float(cv) / 100.0
-        last_hfrac = 1.0
-        for s in samples:
-            hfrac = _hifi_value_to_frac(hifi_cfg, hv, s)
-            PER_SAMPLE_FRACS[(label, s["sample"])] = (hfrac, cfrac)
-            last_hfrac = hfrac
-        out.append({"label": label, "hifi_frac": last_hfrac, "cifi_frac": cfrac})
+            PER_SAMPLE_FRACS[(label, s["sample"])] = 1.0
+        out.append({"label": label, "cifi_frac": 1.0})
     return out
 
 def build_scenarios(config_dict, samples):
     """Return the list of scenario dicts and populate PER_SAMPLE_FRACS."""
     PER_SAMPLE_FRACS.clear()
     PER_SAMPLE_CIFI_SRC.clear()
-    hifi_cfg  = config_dict.get("hifi", {}).get("downsample", {})
-    dil_cfg   = config_dict.get("dilution", {})
+    dil_cfg = config_dict.get("dilution", {})
 
-    hifi_on = hifi_cfg.get("enabled", False)
     cifi_on = dil_cfg.get("enabled", False)
     external_on = any(s["cifi_external"] for s in samples)
 
-    if hifi_on:
-        fasta_samples = [s["sample"] for s in samples if s["hifi_fasta"]]
-        if fasta_samples:
-            raise ValueError(
-                f"hifi.downsample.enabled cannot be combined with `hifi_fasta` "
-                f"(FASTA is not sub-sampleable by samtools view). Samples using "
-                f"hifi_fasta: {fasta_samples}. Provide `hifi_bam` instead, or "
-                f"disable hifi.downsample."
-            )
-
     if external_on:
-        if hifi_on or cifi_on:
+        if cifi_on:
             raise ValueError(
                 "cifi_external (pre-downsampled CiFi) cannot be combined with "
-                "hifi.downsample.enabled or dilution.enabled. Disable the "
-                "fractional downsample modes when supplying pre-downsampled inputs."
+                "dilution.enabled. Disable the dilution sweep when supplying "
+                "pre-downsampled inputs."
             )
         return _scenarios_cifi_external(samples)
 
-    if hifi_on and cifi_on:
-        return _scenarios_zip(hifi_cfg, dil_cfg, samples)
-    if hifi_on:
-        return _scenarios_hifi_only(hifi_cfg, samples)
     if cifi_on:
         return _scenarios_cifi_only(dil_cfg, samples)
 
     # nothing enabled: backward-compat single scenario "100"
     for s in samples:
-        PER_SAMPLE_FRACS[("100", s["sample"])] = (1.0, 1.0)
+        PER_SAMPLE_FRACS[("100", s["sample"])] = 1.0
     return _scenarios_default()
 
 SCENARIOS = build_scenarios(config, SAMPLES)
 FRAC_LABELS = [s["label"] for s in SCENARIOS]
 
-def get_hifi_frac_for(label: str, sample: str) -> float:
-    return PER_SAMPLE_FRACS[(label, sample)][0]
-
 def get_cifi_frac_for(label: str, sample: str) -> float:
-    return PER_SAMPLE_FRACS[(label, sample)][1]
+    return PER_SAMPLE_FRACS[(label, sample)]
 
 # ---------------- Targets ----------------
 rule all:
@@ -378,10 +272,10 @@ rule all:
 # ---------------- Core steps ----------------
 
 rule cifi_qc:
-    """Run CiFi QC on raw CiFi input (BAM or FASTQ)"""
+    """Run CiFi QC on the merged per-sample CiFi BAM (built by `merge_cifi`)."""
     priority: 10
     input:
-        cifi=lambda w: get_sample_data(w.sample)["cifi_input"]
+        cifi=OUTDIR + "/cifi/merged/{sample}.cifi.bam"
     output:
         pdf=OUTDIR + "/qc_cifi/{sample}/qc.pdf"
     params:
@@ -396,92 +290,90 @@ rule cifi_qc:
         "cifi qc {input.cifi} -o {params.outdir} {params.enzyme_args} "
         "-n {params.num_reads} --min-sites {params.min_sites}"
 
-rule cifi_fastq_to_bam:
-    """Convert canonical CiFi FASTQ or FASTA (gzipped or not) to an unmapped BAM."""
+rule merge_cifi:
+    """Merge all CiFi input cells into a single unmapped BAM (per sample).
+
+    Accepts any mix of BAM/FASTQ/FASTA (gzipped OK): FASTQ/FASTA are converted
+    via `samtools import`, then everything is concatenated with `samtools cat`
+    (CiFi reads are unmapped, so headers carry no @SQ to conflict). A single
+    BAM input is symlinked; a single FASTQ/FASTA is imported directly.
+    """
     priority: 50
     input:
-        fq=lambda w: get_sample_data(w.sample)["cifi_input"]
+        files=lambda w: get_sample_data(w.sample)["cifi_files"]
     output:
-        bam=OUTDIR + "/cifi/{sample}.from_fastq.bam"
+        bam=OUTDIR + "/cifi/merged/{sample}.cifi.bam"
     threads: 8
-    resources:
-        mem_mb=16000, runtime=4 * 60, slurm_partition=SLURM_PARTITION, slurm_account=SLURM_ACCOUNT
-    shell:
-        "samtools import -@ {threads} -0 {input.fq} -o {output.bam}"
-
-rule downsample_hifi_bam:
-    """Create label-specific HiFi BAM (fraction == 1.0 → symlink)."""
-    priority: 150
-    input:
-        bam=lambda w: get_sample_data(w.sample)["hifi_bam"]
-    output:
-        bam=OUTDIR + "/hifi/{sample}.{label}.hifi.bam"
-    params:
-        frac=lambda w: get_hifi_frac_for(w.label, w.sample),
-        sarg=lambda w: seeddotfrac_from_fraction(get_hifi_frac_for(w.label, w.sample), 100),
-    threads: 4
     resources:
         mem_mb=16000, runtime=4 * 60, slurm_partition=SLURM_PARTITION, slurm_account=SLURM_ACCOUNT
     shell:
         r'''
         set -euo pipefail
         mkdir -p $(dirname {output.bam})
-        if awk "BEGIN {{ exit !({params.frac} >= 0.9999999999) }}"; then
-            ln -sf $(readlink -f {input.bam}) {output.bam}
+        files=( {input.files} )
+        if [ "${{#files[@]}}" -eq 1 ]; then
+            case "${{files[0]}}" in
+              *.bam) ln -sf "$(readlink -f "${{files[0]}}")" {output.bam} ;;
+              *)     samtools import -@ {threads} -0 "${{files[0]}}" -o {output.bam} ;;
+            esac
         else
-            samtools view -@ {threads} -b -s {params.sarg} -o {output.bam} {input.bam}
+            TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+            bams=(); i=0
+            for f in "${{files[@]}}"; do
+              case "$f" in
+                *.bam) bams+=("$f") ;;
+                *)     imp="$TMP/imp_$i.bam"; samtools import -@ {threads} -0 "$f" -o "$imp"; bams+=("$imp"); i=$((i+1)) ;;
+              esac
+            done
+            samtools cat -@ {threads} -o {output.bam} "${{bams[@]}}"
         fi
         '''
 
-def _hifi_fasta_src(w):
-    """Input resolver for `rule hifi_fasta`: user FASTA (when provided) or the
-    labeled HiFi BAM produced by `downsample_hifi_bam`."""
-    if hifi_input_is_fasta(w.sample):
-        return get_sample_data(w.sample)["hifi_fasta"]
-    return OUTDIR + f"/hifi/{w.sample}.{w.label}.hifi.bam"
+def get_hifi_inputs(sample_name):
+    """Resolve the HiFi files handed to hifiasm for a sample.
 
-rule hifi_fasta:
-    """Produce per-label HiFi FASTA for hifiasm.
-
-    BAM input → `samtools fasta`.
-    FASTA input → symlink (or gunzip if .gz, since downstream tools want plain FASTA).
+    hifiasm reads multiple inputs natively and accepts FASTQ/FASTA directly, so
+    those are passed through unchanged. BAM is the only format hifiasm cannot
+    read, so each BAM is converted to FASTQ (by `rule hifi_bam_to_fastq`) and the
+    converted path is substituted in its place. HiFi is never downsampled.
     """
-    priority: 100
+    out = []
+    for idx, path in enumerate(get_sample_data(sample_name)["hifi_files"]):
+        if _classify_input(path) == "bam":
+            out.append(OUTDIR + f"/hifi/{sample_name}/cell{idx}.fastq")
+        else:
+            out.append(path)
+    return out
+
+def _hifi_bam_for_idx(w):
+    """The source BAM behind `rule hifi_bam_to_fastq`'s {idx} output."""
+    return get_sample_data(w.sample)["hifi_files"][int(w.idx)]
+
+rule hifi_bam_to_fastq:
+    """Convert one HiFi BAM cell to FASTQ (hifiasm cannot read BAM directly).
+
+    FASTQ/FASTA HiFi inputs bypass this rule entirely — `get_hifi_inputs`
+    forwards them to hifiasm as-is.
+    """
+    priority: 150
+    wildcard_constraints:
+        idx=r"[0-9]+"
     input:
-        src=_hifi_fasta_src
+        bam=_hifi_bam_for_idx
     output:
-        fa=OUTDIR + "/hifi/{sample}.{label}.hifi.fa"
-    threads: 8
+        fq=OUTDIR + "/hifi/{sample}/cell{idx}.fastq"
+    threads: 4
     resources:
-        mem_mb=32000, runtime=4 * 60, slurm_partition=SLURM_PARTITION, slurm_account=SLURM_ACCOUNT
+        mem_mb=16000, runtime=4 * 60, slurm_partition=SLURM_PARTITION, slurm_account=SLURM_ACCOUNT
     shell:
-        r'''
-        set -euo pipefail
-        mkdir -p $(dirname {output.fa})
-        SRC="{input.src}"
-        case "$SRC" in
-          *.bam)
-            samtools fasta -@ {threads} "$SRC" > {output.fa}
-            ;;
-          *.fa.gz|*.fasta.gz)
-            gunzip -c "$SRC" > {output.fa}
-            ;;
-          *.fa|*.fasta)
-            ln -sf "$(readlink -f "$SRC")" {output.fa}
-            ;;
-          *)
-            echo "ERROR: unsupported HiFi input extension: $SRC" >&2
-            exit 1
-            ;;
-        esac
-        '''
+        "samtools fastq -@ {threads} {input.bam} > {output.fq}"
 
 
 rule downsample_cifi_bam:
     """Create label-specific CiFi BAM (for porec_nextflow and downstream FASTQ).
 
     Input path comes from `get_cifi_bam`:
-      - canonical mode: sample's full CiFi BAM (or the from_fastq-converted BAM).
+      - canonical mode: sample's merged CiFi BAM (built by `merge_cifi`).
       - external mode: user's pre-downsampled BAM / FASTQ / FASTA for this label.
 
     BAM input: symlink if fraction=1.0, else `samtools view -s`.
@@ -565,12 +457,16 @@ rule cifi2pe_split:
         "-m {params.min_frags} -l {params.min_frag_len} {params.extra}"
 
 rule hifiasm_dual_scaf:
-    """Assemble with hifiasm --dual-scaf (produces hap1/2 ctg GFAs)"""
+    """Assemble with hifiasm --dual-scaf (produces hap1/2 ctg GFAs).
+
+    All HiFi cells are passed as positional inputs (hifiasm reads multiple files
+    natively); BAM cells were pre-converted to FASTQ by `rule hifi_bam_to_fastq`.
+    """
     priority: 500
     input:
         r1=OUTDIR + "/cifi2pe/{sample}.{label}_R1.fastq",
         r2=OUTDIR + "/cifi2pe/{sample}.{label}_R2.fastq",
-        hifi=OUTDIR + "/hifi/{sample}.{label}.hifi.fa"
+        hifi=lambda w: get_hifi_inputs(w.sample)
     output:
         hap1_gfa=OUTDIR + "/asm/{sample}/{label}/{sample}.{label}.asm.hic.hap1.p_ctg.gfa",
         hap2_gfa=OUTDIR + "/asm/{sample}/{label}/{sample}.{label}.asm.hic.hap2.p_ctg.gfa"

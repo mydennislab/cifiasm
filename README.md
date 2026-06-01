@@ -275,3 +275,15 @@ This workflow uses the following external scripts and tools:
 
 - [JuicerTools](https://github.com/aidenlab/JuicerTools) - Hi-C file generation
   by Aiden Lab.
+
+
+## Citation
+
+If you use this tool, please cite:
+
+> Abuelanin M, Kaya G, Lake JA, Lambert C, Wu MV, Berendzen KM, Krasheninnikova K, Wood JMD, Solomon NG, Donaldson ZR, Bales KL, Howe K, Korlach J, Manoli D, Tollkuhn J, Dennis MY. Single-library chromosome-scale diploid assemblies of vole genomes resolve a species-specific duplication implicated in pair bonding. bioRxiv 2026.03.13.711624. https://doi.org/10.64898/2026.03.13.711624
+
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

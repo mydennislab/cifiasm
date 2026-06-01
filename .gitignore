@@ -17,3 +17,6 @@ work/
 tmp/
 logs/
 refs/
+
+# Internal-only local tests (not part of the published pipeline)
+tests/

@@ -13,28 +13,41 @@ output_dir: results
 # Sample definitions (required)
 # -----------------------------
 # Define one or more samples to process. Each sample needs:
-#   - hifi_bam: Path to PacBio HiFi reads BAM file
-#   - cifi: Path to CiFi reads (BAM or FASTQ/FASTQ.GZ)
+#   - hifi:   One or more PacBio HiFi read files (BAM / FASTQ / FASTA, gzipped OK)
+#   - cifi:   One or more CiFi read files (BAM / FASTQ / FASTA, gzipped OK)
 #   - enzyme: Restriction enzyme used (e.g. HindIII, DpnII, NlaIII)
 #
-# Example with multiple samples:
+# `hifi:` and `cifi:` each accept a single path OR a list of files; file type is
+# auto-detected by extension. Multiple files (e.g. several SMRT cells) are merged
+# per sample before assembly: BAM/FASTQ are concatenated into one BAM; FASTA files
+# are concatenated into one FASTA. FASTA cannot be mixed with BAM/FASTQ in the
+# same `hifi:` list. (Legacy keys `hifi_bam:` / `hifi_fasta:` / `cifi_bam:` are
+# still accepted as aliases.)
+#
+# Example with multiple samples and multiple input files:
 #   samples:
-#     sample_A:
-#       hifi_bam: /data/sample_A/hifi.bam
-#       cifi: /data/sample_A/cifi.bam
+#     sample_A:                       # several HiFi SMRT cells + one CiFi run
+#       hifi:
+#         - /data/sample_A/hifi.cell1.fastq.gz
+#         - /data/sample_A/hifi.cell2.fastq.gz
+#         - /data/sample_A/hifi.cell3.bam
+#       cifi: /data/sample_A/cifi.fastq.gz
 #       enzyme: HindIII
-#     sample_B:
-#       hifi_bam: /data/sample_B/hifi.bam
-#       cifi: /data/sample_B/cifi.fastq.gz
+#     sample_B:                       # single-file form (still supported)
+#       hifi: /data/sample_B/hifi.bam
+#       cifi: /data/sample_B/cifi.bam
 #       enzyme: HindIII
 
 samples:
   my_sample:
-    hifi_bam: /path/to/hifi_reads.bam        # OR use `hifi_fasta:` (see below)
-    # hifi_fasta: /path/to/hifi.fa.gz        # pre-built HiFi FASTA/FASTA.GZ;
-    #                                        # skips BAM->FASTA conversion and
-    #                                        # cannot be combined with hifi.downsample.
-    cifi: /path/to/cifi_reads.bam            # BAM, FASTQ, or FASTA (gzipped OK)
+    hifi: /path/to/hifi_reads.bam            # path OR list; BAM/FASTQ/FASTA (gzipped OK)
+    # hifi:                                  # multiple HiFi cells -> all passed to hifiasm
+    #   - /path/to/hifi.cell1.fastq.gz
+    #   - /path/to/hifi.cell2.bam
+    # NOTE: all HiFi cells are handed to hifiasm directly (it reads multiple
+    #       inputs natively); the only conversion is BAM -> FASTQ. HiFi is never
+    #       downsampled.
+    cifi: /path/to/cifi_reads.bam            # path OR list; BAM/FASTQ/FASTA (gzipped OK)
     enzyme: HindIII
     # Optional: custom restriction site instead of a named enzyme.
     # If set, `site` + `cut_pos` override `enzyme` for cifi qc/digest.
@@ -45,9 +58,9 @@ samples:
     # Each label maps to a BAM / FASTQ / FASTA (gzipped OK) that the pipeline
     # feeds in as-is (FASTQ/FASTA are wrapped into a BAM via `samtools import`).
     # Keys become `{label}` in output paths (must match [A-Za-z0-9._-]+). The
-    # `cifi:` above is still required (used only for `cifi_qc`). Cannot be
-    # combined with dilution.enabled or hifi.downsample.enabled. If multiple
-    # samples are defined, every sample must declare the same label set.
+    # `cifi:` above is still required (merged and used for `cifi_qc`). Cannot be
+    # combined with dilution.enabled. If multiple samples are defined, every
+    # sample must declare the same label set.
     # cifi_external:
     #   c10: /path/to/cifi.10pct.bam
     #   c25: /path/to/cifi.25pct.fa.gz
@@ -63,30 +76,6 @@ cifi:
     strip_overhang: true
     gzip: false
     fast: false
-
-# HiFi downsampling (optional)
-# -----------------------------
-# When enabled, the pipeline produces a downsampled HiFi BAM (and FASTA)
-# alongside the existing CiFi dilution. Two modes:
-#
-#   mode: depth     -> compute fraction from haploid genome size + target X
-#                      coverage. Requires hifi.downsample.genome_size.
-#                      depths: list of target X (e.g. [5, 10, 30] -> labels h5X..)
-#
-#   mode: fraction  -> direct percentages of total HiFi reads, like dilution.
-#                      percentages: list of % (e.g. [20, 50] -> labels h20pct..)
-#
-# When BOTH hifi.downsample.enabled and dilution.enabled are true, the lists
-# are zipped pairwise (must be the same length) and labels look like
-# "h10X_c20", "h30X_c50", ...
-
-hifi:
-  downsample:
-    enabled: false
-    mode: depth                  # "depth" | "fraction"
-    genome_size: 2500000000      # bp (haploid). Required when mode == "depth"
-    depths:      [5, 10, 30]     # target X coverage  (mode == "depth")
-    percentages: [20, 50]        # % of total reads   (mode == "fraction")
 
 # CiFi dilution settings (optional)
 # ---------------------------------
