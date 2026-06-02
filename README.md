@@ -1,4 +1,4 @@
-# CiFi Assembly Workflow (active development)
+# CiFi Assembly Workflow
 
 A Snakemake pipeline for generating chromosome-scale, phased de novo assemblies using HiFi long reads and CiFi (Long-reads Chromatin Conformation Capture) data, with support for manual curation via Juicebox Assembly Tools (JBAT).
 
