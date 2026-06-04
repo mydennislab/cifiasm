@@ -4,7 +4,7 @@ A Snakemake pipeline for generating chromosome-scale, phased de novo assemblies 
 
 ## Overview
 
-This pipeline takes HiFi reads (BAM or pre-built FASTA) and CiFi reads (BAM, FASTQ, or FASTA) as input and produces haplotype-resolved, scaffold-level assemblies with QC metrics, contact maps, and editable `.hic` files for manual curation in Juicebox.
+This pipeline takes HiFi reads and CiFi reads (each as BAM, FASTQ, or FASTA, one or more files per sample) and produces haplotype-resolved, scaffold-level assemblies with QC metrics, contact maps, and editable `.hic` files for manual curation in Juicebox.
 
 
 ## Workflow Diagram
@@ -47,18 +47,30 @@ cp config.example.yaml config.yaml
 ```yaml
 samples:
   my_sample:
-    hifi_bam: /path/to/hifi_reads.bam      # PacBio HiFi reads (BAM)
-    # OR, instead of hifi_bam:
-    # hifi_fasta: /path/to/hifi.fa.gz      # pre-built HiFi FASTA (.fa / .fa.gz);
-    #                                      # skips BAM->FASTA conversion and is
-    #                                      # incompatible with hifi.downsample.
-    cifi: /path/to/cifi_reads.bam          # CiFi reads (BAM, FASTQ, or FASTA; .gz OK)
+    hifi: /path/to/hifi_reads.bam          # one path, or a list of files
+    cifi: /path/to/cifi_reads.bam          # one path, or a list of files
     enzyme: HindIII                        # Restriction enzyme (HindIII, DpnII, NlaIII, ...)
     # Optional: custom restriction site instead of a named enzyme.
     # site: "GANTC"                         # IUPAC recognition sequence
     # cut_pos: 1                            # 0-based cut position within the site
 ```
-Exactly one of `hifi_bam:` or `hifi_fasta:` must be set per sample.
+
+`hifi:` and `cifi:` each take a single file or a list of files (e.g. several SMRT
+cells). Both accept BAM, FASTQ, and FASTA (`.gz` is fine), detected by extension.
+HiFi files go straight to hifiasm; CiFi files are merged before digestion.
+
+```yaml
+  multi_cell_sample:
+    hifi:
+      - /path/to/hifi.cell1.bam
+      - /path/to/hifi.cell2.fastq.gz
+    cifi:
+      - /path/to/cifi.cell1.bam
+      - /path/to/cifi.cell2.fastq.gz
+    enzyme: HindIII
+```
+
+The legacy keys `hifi_bam:`, `hifi_fasta:`, and `cifi_bam:` still work as aliases.
 
 ### Output directory (optional, default `results`)
 ```yaml
@@ -67,57 +79,36 @@ output_dir: results
 All pipeline outputs land under this directory in their existing subdir
 structure. Set to a different path to write elsewhere.
 
-### Downsampling (optional)
+### CiFi downsampling (optional)
 
-Three independent ways to downsample reads. Each scenario shows up as a
-single `{label}` value in output paths.
+Only CiFi is downsampled; HiFi always goes to hifiasm at full depth. Each
+scenario becomes one `{label}` in the output paths.
 
-**CiFi-only sweep (existing, unchanged):**
+To assemble at several CiFi coverage levels, enable the dilution sweep:
 ```yaml
 dilution:
   enabled: false                       # use 100% CiFi reads
-  percentages: [20, 40, 60, 80, 100]   # or sweep across coverage levels
+  percentages: [20, 40, 60, 80, 100]   # or sweep across these percentages
 ```
-Labels are the numeric percentages: `20`, `40`, `100`, ...
+The label is the percentage: `20`, `40`, `100`, ...
 
-**HiFi-only sweep (new):**
-```yaml
-hifi:
-  downsample:
-    enabled: true
-    mode: depth                  # "depth" | "fraction"
-    genome_size: 2500000000      # bp (haploid). Required for depth mode.
-    depths:      [5, 10, 30]     # target X coverage  (depth mode)
-    percentages: [20, 50]        # % of total reads   (fraction mode)
-```
-Depth-mode labels look like `h5X`, `h10X`, `h30X`. Fraction-mode labels look
-like `h20pct`, `h50pct`. The pipeline computes the per-sample fraction from
-each sample's actual HiFi base count via `samtools stats` (cached on disk).
-
-**HiFi + CiFi together (zip):** when both `hifi.downsample.enabled` and
-`dilution.enabled` are `true`, the lists are paired index-wise (must be the
-same length). Labels combine both: `h5X_c20`, `h10X_c50`, ...
-
-**Pre-downsampled CiFi (external):** when you already have one or more
-downsampled CiFi inputs and don't want the pipeline to re-sample, declare
-them per-sample under `cifi_external`:
+If you already have downsampled CiFi files and don't want the pipeline to
+re-sample, list them per-sample under `cifi_external`:
 ```yaml
 samples:
   my_sample:
-    hifi_bam: /data/hifi.bam
-    cifi: /data/cifi.bam          # still required, used only for cifi_qc
+    hifi: /data/hifi.bam
+    cifi: /data/cifi.bam          # still required, used for cifi_qc
     cifi_external:
       c10:  /data/cifi.10pct.bam
       c25:  /data/cifi.25pct.fa.gz
       c100: /data/cifi.bam
     enzyme: HindIII
 ```
-Each entry may be BAM, FASTQ, or FASTA (gzipped or not). BAMs are symlinked
-in; FASTQ/FASTA are wrapped into an unmapped BAM via `samtools import`. No
-re-sampling happens. Each key becomes a `{label}` in the output paths (must
-match `[A-Za-z0-9._-]+`). Cannot be combined with `dilution.enabled` or
-`hifi.downsample.enabled`. When multiple samples are defined, every sample
-must declare the same label set.
+Each entry may be BAM, FASTQ, or FASTA (`.gz` OK). BAMs are linked in;
+FASTQ/FASTA are imported to BAM. Each key becomes a `{label}` (must match
+`[A-Za-z0-9._-]+`). This cannot be combined with `dilution.enabled`, and when
+multiple samples are defined they must share the same set of labels.
 
 ### Tool Paths
 ```yaml
@@ -172,17 +163,17 @@ snakemake results/stats/my_sample/100/yahs_summary.tsv    # scaffold stats only
 ## Output Files
 
 All pipeline outputs land under a single directory (default: `results/`).
-Override with `output_dir: /some/other/path` in `config.yaml`. The label
-`{label}` encodes the downsampling scenario (e.g. `100`, `h10X`, `h10X_c20`).
+Override with `output_dir: /some/other/path` in `config.yaml`. The `{label}`
+encodes the CiFi scenario (e.g. `100`, or a dilution percentage like `20`).
 
 ```
 results/
 ├── qc_cifi/{sample}/
 │   └── qc.pdf                            # CiFi QC report
-├── hifi/
-│   ├── {sample}.{label}.hifi.bam         # (down)sampled HiFi BAM (only when hifi_bam is set)
-│   └── {sample}.{label}.hifi.fa          # HiFi FASTA fed to hifiasm
+├── hifi/{sample}/
+│   └── cell{n}.fastq                     # HiFi BAM cells converted to FASTQ (FASTQ/FASTA bypass this)
 ├── cifi/
+│   ├── merged/{sample}.cifi.bam          # all CiFi cells merged
 │   └── {sample}.{label}.{bam,bam.bai}    # per-label CiFi BAM
 ├── cifi2pe/
 │   └── {sample}.{label}_R{1,2}.fastq     # Hi-C-like paired reads (from cifi digest)
@@ -232,11 +223,10 @@ After the pipeline completes, use Juicebox Assembly Tools for manual curation:
 
 | Rule | Description |
 |------|-------------|
-| `cifi_qc` | QC report on raw CiFi input (via `cifi qc`) |
-| `cifi_fastq_to_bam` | Wrap canonical CiFi FASTQ/FASTA into an unmapped BAM (when `cifi:` is not a BAM) |
-| `downsample_hifi_bam` | (Down)sample HiFi BAM to a label-specific copy (skipped when `hifi_fasta:` is set) |
-| `hifi_fasta` | Produce per-label HiFi FASTA: `samtools fasta` from BAM, or symlink/gunzip from `hifi_fasta:` |
-| `downsample_cifi_bam` | Produce per-label CiFi BAM — BAM input sampled or symlinked, FASTQ/FASTA imported via `samtools import` |
+| `merge_cifi` | Merge all CiFi cells into one BAM (`samtools import` + `samtools cat`) |
+| `cifi_qc` | QC report on the merged CiFi BAM (via `cifi qc`) |
+| `hifi_bam_to_fastq` | Convert a HiFi BAM cell to FASTQ (FASTQ/FASTA cells skip this) |
+| `downsample_cifi_bam` | Produce per-label CiFi BAM — sampled with `samtools view -s`, or symlinked at 100% |
 | `cifi_fastq_from_downsampled_bam` | Extract FASTQ from per-label CiFi BAM |
 | `cifi2pe_split` | Digest CiFi reads into Hi-C-like PE reads (via `cifi digest`) |
 | `hifiasm_dual_scaf` | Assemble with hifiasm --dual-scaf |
