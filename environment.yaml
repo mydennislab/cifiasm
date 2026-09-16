@@ -6,13 +6,17 @@ channels:
 
 dependencies:
   - snakemake
+  - snakemake-executor-plugin-slurm   # `snakemake --executor slurm`
   - samtools
+  - minimap2
   - hifiasm
   - gfatools
-  - yahs
+  - yahs           # also provides the `juicer` binary (pre / post)
   - k8
-  - nextflow
+  - openjdk        # for juicer_tools pre
+  - pretextmap     # .pretext contact map from the scaffold pairs file
+  - pretextsnapshot  # PNG of the map (contact_maps.snapshot)
   - python
-  - biopython
-  - numpy
-  - matplotlib
+  - pip
+  - pip:
+    - cifi >= 1.1.0
