@@ -1,110 +1,105 @@
-# CiFi Assembly Workflow Configuration
-# =====================================
-# Copy this file to config.yaml and update paths for your data:
-#   cp config.example.yaml config.yaml
-#
-# Then edit config.yaml with your actual file paths.
+# cifiasm configuration
+# Copy to config.yaml and edit the paths:  cp config.example.yaml config.yaml
 
-# Output directory (optional, default: "results")
-# All workflow outputs land under this directory in subdirs
-# (hifi/, cifi/, asm/, porec/, yahs/, qc_porec/, jbat/, stats/, ...).
+# Everything the pipeline writes lands under this directory
+# (cifi/, cifi2pe/, hifi/, asm/, mapping/, contacts/, yahs/, jbat/, contact_maps/,
+# stats/, qc_cifi/).
 output_dir: results
 
-# Sample definitions (required)
-# -----------------------------
-# Define one or more samples to process. Each sample needs:
-#   - hifi:   One or more PacBio HiFi read files (BAM / FASTQ / FASTA, gzipped OK)
-#   - cifi:   One or more CiFi read files (BAM / FASTQ / FASTA, gzipped OK)
-#   - enzyme: Restriction enzyme used (e.g. HindIII, DpnII, NlaIII)
-#
-# `hifi:` and `cifi:` each accept a single path OR a list of files; file type is
-# auto-detected by extension. Multiple files (e.g. several SMRT cells) are merged
-# per sample before assembly: BAM/FASTQ are concatenated into one BAM; FASTA files
-# are concatenated into one FASTA. FASTA cannot be mixed with BAM/FASTQ in the
-# same `hifi:` list. (Legacy keys `hifi_bam:` / `hifi_fasta:` / `cifi_bam:` are
-# still accepted as aliases.)
-#
-# Example with multiple samples and multiple input files:
-#   samples:
-#     sample_A:                       # several HiFi SMRT cells + one CiFi run
-#       hifi:
-#         - /data/sample_A/hifi.cell1.fastq.gz
-#         - /data/sample_A/hifi.cell2.fastq.gz
-#         - /data/sample_A/hifi.cell3.bam
-#       cifi: /data/sample_A/cifi.fastq.gz
-#       enzyme: HindIII
-#     sample_B:                       # single-file form (still supported)
-#       hifi: /data/sample_B/hifi.bam
-#       cifi: /data/sample_B/cifi.bam
-#       enzyme: HindIII
-
+# Samples
+# -------
+# hifi:   one path or a list of PacBio HiFi read files (BAM / FASTQ / FASTA, .gz OK).
+#         Every file is handed to hifiasm at full depth; BAM cells are converted
+#         to FASTQ first. HiFi is never downsampled.
+# cifi:   one path or a list of CiFi read files (BAM / FASTQ / FASTA, .gz OK).
+#         All cells are merged into one unmapped BAM before QC and digestion.
+# enzyme: restriction enzyme used for the CiFi library (HindIII, DpnII, NlaIII, ...).
+#         `site` + `cut_pos` override `enzyme` for a custom recognition site.
+# Legacy keys hifi_bam / hifi_fasta / cifi_bam are still accepted as aliases.
 samples:
   my_sample:
-    hifi: /path/to/hifi_reads.bam            # path OR list; BAM/FASTQ/FASTA (gzipped OK)
-    # hifi:                                  # multiple HiFi cells -> all passed to hifiasm
+    hifi: /path/to/hifi_reads.bam
+    # hifi:
     #   - /path/to/hifi.cell1.fastq.gz
     #   - /path/to/hifi.cell2.bam
-    # NOTE: all HiFi cells are handed to hifiasm directly (it reads multiple
-    #       inputs natively); the only conversion is BAM -> FASTQ. HiFi is never
-    #       downsampled.
-    cifi: /path/to/cifi_reads.bam            # path OR list; BAM/FASTQ/FASTA (gzipped OK)
+    cifi: /path/to/cifi_reads.bam
     enzyme: HindIII
-    # Optional: custom restriction site instead of a named enzyme.
-    # If set, `site` + `cut_pos` override `enzyme` for cifi qc/digest.
-    # site: "GANTC"    # IUPAC recognition sequence
-    # cut_pos: 1       # 0-based cut position within the site
+    # site: "GANTC"     # IUPAC recognition sequence
+    # cut_pos: 1        # 0-based cut position within the site
     #
-    # Optional: pre-downsampled CiFi inputs (external mode).
-    # Each label maps to a BAM / FASTQ / FASTA (gzipped OK) that the pipeline
-    # feeds in as-is (FASTQ/FASTA are wrapped into a BAM via `samtools import`).
-    # Keys become `{label}` in output paths (must match [A-Za-z0-9._-]+). The
-    # `cifi:` above is still required (merged and used for `cifi_qc`). Cannot be
-    # combined with dilution.enabled. If multiple samples are defined, every
+    # Pre-downsampled CiFi inputs (external mode). Each key becomes a {label}
+    # in the output paths ([A-Za-z0-9._-]+); each value is a BAM / FASTQ / FASTA
+    # used as-is for that label. `cifi:` above is still required (cifi_qc runs on
+    # it). Cannot be combined with dilution.enabled; with several samples every
     # sample must declare the same label set.
     # cifi_external:
     #   c10: /path/to/cifi.10pct.bam
     #   c25: /path/to/cifi.25pct.fa.gz
     #   c100: /path/to/cifi.bam
 
+# CiFi toolkit (cifi >= 1.1.0) | refer to https://github.com/mydennislab/cifi-toolkit for details
 cifi:
   qc:
-    num_reads: 0
-    min_sites: 1
+    num_reads: 0            # reads sampled for QC (0 = all)
+    min_sites: 0            # min enzyme sites for a read to count as usable
   digest:
-    min_fragments: 3
-    min_frag_len: 20
-    strip_overhang: true
-    gzip: false
-    fast: false
+    min_segments: 1         # -m: min segments per read
+    min_segment_len: 20     # -l: min length of an emitted segment, bp (toolkit default is 60)
+    strip_overhang: false    # false -> --no-strip-overhang
+    revcomp_r2: false       # true -> --revcomp-r2 (independent of strip_overhang)
+    gzip: false             # compress R1/R2
+    fast: false             # streaming statistics
+  # Legacy keys min_fragments / min_frag_len are accepted as aliases of
+  # min_segments / min_segment_len (the new key wins if both are present).
+  # If omitted, min_segments and min_segment_len fall back to 3 and 20 bp.
 
-# CiFi dilution settings (optional)
-# ---------------------------------
-# Control whether to test assembly with different CiFi coverage levels.
-#
-# enabled: false  - Use 100% of CiFi reads only (default, recommended for production)
-# enabled: true   - Run assemblies at each percentage in the list
+# Assembly
+hifiasm:
+  threads: 64
+  telomere_motif: "CCCTAAA" # 5'-end motif; null or "" omits --telo-m
 
+# Segment mapping and contact calling
+mapping:
+  threads: 20              # total for minimap2 and sorting per haplotype
+  contacts_threads: 4      # cifi contacts per haplotype
+  minimap2_preset: map-hifi # do not change without benchmarking
+  contacts_mapq: 0          # cifi contacts -q: min MAPQ for a segment to take part in a contact;
+                            # MAPQ 0 alignments never reach yahs
+
+# Scaffolding uses contacts passing contacts_mapq; mapq: 0 applies no further
+# filter. Contig error correction is disabled by default for CiFi scaffolding.
+yahs:                     # single-threaded
+  mapq: 0                   # yahs -q, applied on top of contacts_mapq
+  contig_ec: false          # true: let yahs break contigs (Hi-C behaviour)
+
+# CiFi dilution sweep (optional). Only CiFi is downsampled; each percentage
+# becomes one {label}. Disabled: a single scenario labelled 100.
+# This specific options was developed as a part of the voles paper to check
+# how much cifi is needed for successful scaffolding.
 dilution:
   enabled: false
   percentages: [20, 40, 60, 80, 100]
 
-# External tool paths (required)
-# ------------------------------
-# singularity_cache: Directory for Singularity container images (used by wf-pore-c)
-# threed_dna: Path to 3D-DNA repository (git clone https://github.com/aidenlab/3d-dna.git)
-# juicer_tools_jar: Path to JuicerTools JAR file
-#   Download: https://github.com/aidenlab/JuicerTools/releases/download/v3.0.0/juicer_tools.jar
+# Contact maps for manual curation. Each key adds files to `rule all`; the rules
+# stay available as targets whatever is set here. Without this block: juicebox
+# and pretext on, pairs and snapshot off.
+# Snapshots also build the required Pretext map, even when pretext is false.
+contact_maps:
+  juicebox: true            # jbat_pre + jbat_hic: .assembly and .hic for Juicebox
+  pretext: true             # scaffold_pairs + pretext_map: 4DN pairs in scaffold coordinates and the PretextMap map
 
+  pairs: false              # keep the .scaffolds.pairs.gz in rule all when pretext is off
+  snapshot: true           # pretext_snapshot: one PNG of the whole map (PretextSnapshot)
+
+# External tools
+# juicer_tools_jar must be a JuicerTools JAR that provides the `pre` command
+# (juicer_tools_1.22.01.jar does; the aidenlab/JuicerTools 3.0.0 release does not):
+#   wget https://s3.amazonaws.com/hicfiles.tc4ga.com/public/juicer/juicer_tools_1.22.01.jar
+# The juicer_tools_jar key is required even when contact_maps.juicebox is false.
 tools:
-  singularity_cache: /path/to/singularity/cache
-  threed_dna: "./3d-dna"
-  juicer_tools_jar: "./juicer_tools.3.0.0.jar"
+  juicer_tools_jar: "./juicer_tools_1.22.01.jar"
 
-# SLURM cluster settings (optional)
-# ----------------------------------
-# Configure SLURM partition and account for cluster jobs.
-# Defaults to partition="low" and account="publicgrp" if not specified.
-
+# SLURM (optional; defaults shown)
 slurm:
   partition: "low"
   account: "publicgrp"
