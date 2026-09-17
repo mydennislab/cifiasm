@@ -16,7 +16,7 @@ dependencies:
   - openjdk        # for juicer_tools pre
   - pretextmap     # .pretext contact map from the scaffold pairs file
   - pretextsnapshot  # PNG of the map (contact_maps.snapshot)
-  - python
+  - python=3.12
   - pip
   - pip:
     - cifi >= 1.1.0
