@@ -8,6 +8,8 @@ rule hifiasm_dual_scaf:
     output:
         hap1_gfa=OUTDIR + "/asm/{sample}/{label}/{sample}.{label}.asm.hic.hap1.p_ctg.gfa",
         hap2_gfa=OUTDIR + "/asm/{sample}/{label}/{sample}.{label}.asm.hic.hap2.p_ctg.gfa"
+    benchmark:
+        OUTDIR + "/benchmarks/hifiasm_dual_scaf/{sample}/{label}.tsv"
     params:
         pref=OUTDIR + "/asm/{sample}/{label}/{sample}.{label}.asm",
         telomere_args=["--telo-m", HIFIASM_TELOMERE_MOTIF] if HIFIASM_TELOMERE_MOTIF else []

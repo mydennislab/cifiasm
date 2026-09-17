@@ -12,6 +12,8 @@ rule jbat_pre:
         assembly_agp=JBAT_PREFIX + ".assembly.agp",
         chrom_sizes=JBAT_PREFIX + ".chrom.sizes",
         scale_factor=JBAT_PREFIX + ".scale_factor.txt"
+    benchmark:
+        OUTDIR + "/benchmarks/jbat_pre/{sample}/{label}/hap{hap}.tsv"
     params:
         mapq=YAHS_MAPQ,
         prefix=JBAT_PREFIX,
@@ -43,6 +45,8 @@ rule jbat_hic:
         chrom_sizes=JBAT_PREFIX + ".chrom.sizes"
     output:
         hic=JBAT_PREFIX + ".hic"
+    benchmark:
+        OUTDIR + "/benchmarks/jbat_hic/{sample}/{label}/hap{hap}.tsv"
     params:
         jar=JUICER_TOOLS_JAR,
         heap_mb=lambda w, resources: int(resources.mem_mb * 0.9)
@@ -69,6 +73,8 @@ rule jbat_post:
     output:
         final_fa=JBAT_PREFIX + ".FINAL.fa",
         final_agp=JBAT_PREFIX + ".FINAL.agp"
+    benchmark:
+        OUTDIR + "/benchmarks/jbat_post/{sample}/{label}/hap{hap}.tsv"
     params:
         prefix=JBAT_PREFIX
     log:

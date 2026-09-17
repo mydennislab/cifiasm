@@ -6,6 +6,8 @@ rule map_segments:
         segments=OUTDIR + "/cifi2pe/{sample}.{label}.segments.fastq.gz"
     output:
         bam=OUTDIR + "/mapping/{sample}/{label}/hap{hap}/{sample}.{label}.hap{hap}.segments.ns.bam"
+    benchmark:
+        OUTDIR + "/benchmarks/map_segments/{sample}/{label}/hap{hap}.tsv"
     # Name sorting groups segments for contact calling.
     params:
         preset=MINIMAP2_PRESET,
@@ -34,6 +36,8 @@ rule cifi_contacts:
         bed=OUTDIR + "/contacts/{sample}/{label}/hap{hap}/{sample}.{label}.hap{hap}.bed",
         stats=OUTDIR + "/contacts/{sample}/{label}/hap{hap}/{sample}.{label}.hap{hap}_contacts_stats.json",
         report=OUTDIR + "/contacts/{sample}/{label}/hap{hap}/{sample}.{label}.hap{hap}_contacts_report.html"
+    benchmark:
+        OUTDIR + "/benchmarks/cifi_contacts/{sample}/{label}/hap{hap}.tsv"
     params:
         mapq=CONTACTS_MAPQ
     threads: 4
@@ -54,6 +58,8 @@ rule yahs_scaffold:
         scaffolds=YAHS_PREFIX + "_scaffolds_final.fa",
         agp=YAHS_PREFIX + "_scaffolds_final.agp",
         bin=YAHS_PREFIX + ".bin"
+    benchmark:
+        OUTDIR + "/benchmarks/yahs_scaffold/{sample}/{label}/hap{hap}.tsv"
     params:
         prefix=YAHS_PREFIX,
         args=YAHS_ARGS

@@ -22,6 +22,8 @@ rule scaffold_pairs:
         scaf_fai=YAHS_PREFIX + "_scaffolds_final.fa.fai"
     output:
         pairs=CM_PREFIX + ".scaffolds.pairs.gz"
+    benchmark:
+        OUTDIR + "/benchmarks/scaffold_pairs/{sample}/{label}/hap{hap}.tsv"
     params:
         script=os.path.join(workflow.basedir, "scripts", "scaffold_pairs.sh"),
         mapq=YAHS_MAPQ,
@@ -53,6 +55,8 @@ rule pretext_map:
         pairs=CM_PREFIX + ".scaffolds.pairs.gz"
     output:
         pretext=CM_PREFIX + ".pretext"
+    benchmark:
+        OUTDIR + "/benchmarks/pretext_map/{sample}/{label}/hap{hap}.tsv"
     log:
         CM_PREFIX + ".pretext.log"
     threads: 2
@@ -74,6 +78,8 @@ rule pretext_snapshot:
         pretext=CM_PREFIX + ".pretext"
     output:
         png=CM_PREFIX + ".pretext.png"
+    benchmark:
+        OUTDIR + "/benchmarks/pretext_snapshot/{sample}/{label}/hap{hap}.tsv"
     params:
         outdir=CM_DIR,
         prefix="{sample}.{label}.hap{hap}.",

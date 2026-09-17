@@ -120,6 +120,7 @@ for both `hap1` and `hap2`.
 
 ```
 results/
+├── benchmarks/{rule}/                         per-job time and memory TSVs
 ├── qc_cifi/{sample}/
 │   └── qc.html, qc.json, qc.pdf                 PDF requires matplotlib
 ├── hifi/{sample}/cell{n}.fastq                  converted HiFi BAM inputs
@@ -157,6 +158,11 @@ contact-map outputs in the `contact_maps` section of
 [config.example.yaml](config.example.yaml). Scaffold contacts are exported
 in 4DN pairs format, version 1.0; Pretext maps use the scaffold order in the
 `.fai` file.
+
+Resource-intensive rules write [Snakemake benchmarks](https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#benchmark-rules)
+under `benchmarks/`, grouped by rule and sample, with label, haplotype, or input
+cell where applicable. The TSV columns include elapsed seconds (`s`), CPU
+seconds (`cpu_time`), and peak sampled memory in MiB (`max_rss`).
 
 The default run stops at scaffolds and contact maps. For manual curation,
 see the [Juicebox assembly guide](https://aidenlab.org/assembly/) or

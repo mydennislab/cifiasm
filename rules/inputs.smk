@@ -6,6 +6,8 @@ rule cifi_qc:
     output:
         html=OUTDIR + "/qc_cifi/{sample}/qc.html",
         json=OUTDIR + "/qc_cifi/{sample}/qc.json"
+    benchmark:
+        OUTDIR + "/benchmarks/cifi_qc/{sample}.tsv"
     params:
         outdir=OUTDIR + "/qc_cifi/{sample}",
         enzyme_args=get_enzyme_args,
@@ -25,6 +27,8 @@ rule merge_cifi:
         files=lambda w: get_sample_data(w.sample)["cifi_files"]
     output:
         bam=OUTDIR + "/cifi/merged/{sample}.cifi.bam"
+    benchmark:
+        OUTDIR + "/benchmarks/merge_cifi/{sample}.tsv"
     threads: 8
     resources:
         mem_mb=16000, runtime=4 * 60, slurm_partition=SLURM_PARTITION, slurm_account=SLURM_ACCOUNT
@@ -74,6 +78,8 @@ rule hifi_bam_to_fastq:
         bam=_hifi_bam_for_idx
     output:
         fq=OUTDIR + "/hifi/{sample}/cell{idx}.fastq"
+    benchmark:
+        OUTDIR + "/benchmarks/hifi_bam_to_fastq/{sample}/cell{idx}.tsv"
     threads: 4
     resources:
         mem_mb=16000, runtime=4 * 60, slurm_partition=SLURM_PARTITION, slurm_account=SLURM_ACCOUNT
@@ -88,6 +94,8 @@ rule downsample_cifi_bam:
         src=get_cifi_bam
     output:
         bam=OUTDIR + "/cifi/{sample}.{label}.bam"
+    benchmark:
+        OUTDIR + "/benchmarks/downsample_cifi_bam/{sample}/{label}.tsv"
     params:
         frac=lambda w: get_cifi_frac_for(w.label, w.sample),
         sarg=lambda w: seeddotfrac_from_fraction(get_cifi_frac_for(w.label, w.sample), 100),
@@ -133,6 +141,8 @@ rule cifi_digest:
         segments=OUTDIR + "/cifi2pe/{sample}.{label}.segments.fastq.gz",
         stats=OUTDIR + "/cifi2pe/{sample}.{label}_stats.json",
         report=OUTDIR + "/cifi2pe/{sample}.{label}_digestion_report.html"
+    benchmark:
+        OUTDIR + "/benchmarks/cifi_digest/{sample}/{label}.tsv"
     params:
         out=OUTDIR + "/cifi2pe/{sample}.{label}",
         enzyme_args=get_enzyme_args,
