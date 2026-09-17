@@ -12,12 +12,12 @@ rule map_segments:
     params:
         preset=MINIMAP2_PRESET,
         mm2_threads=lambda w, threads: max(1, threads - MAP_SORT_THREADS),
-        sort_threads=MAP_SORT_THREADS,
+        sort_threads=lambda w, threads: min(MAP_SORT_THREADS, threads - 1),
         sort_mem="2G",
         tmp_prefix=OUTDIR + "/mapping/{sample}/{label}/hap{hap}/{sample}.{label}.hap{hap}.sort_tmp"
     log:
         OUTDIR + "/mapping/{sample}/{label}/hap{hap}/{sample}.{label}.hap{hap}.minimap2.log"
-    threads: 16 + MAP_SORT_THREADS
+    threads: get_threads("mapping", 16 + MAP_SORT_THREADS)
     resources:
         mem_mb=48*1024, runtime=6 * 60, slurm_partition=SLURM_PARTITION, slurm_account=SLURM_ACCOUNT
     shell:
@@ -40,7 +40,7 @@ rule cifi_contacts:
         OUTDIR + "/benchmarks/cifi_contacts/{sample}/{label}/hap{hap}.tsv"
     params:
         mapq=CONTACTS_MAPQ
-    threads: 4
+    threads: get_threads("mapping", 4, key="contacts_threads")
     resources:
         mem_mb=8*1024, runtime=4 * 60, slurm_partition=SLURM_PARTITION, slurm_account=SLURM_ACCOUNT
     shell:

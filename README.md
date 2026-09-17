@@ -109,7 +109,7 @@ used at full depth. CiFi reads are merged per sample before QC and digestion.
 
 The comments in [config.example.yaml](config.example.yaml) document the
 settings, including custom restriction sites, CiFi downsampling,
-pre-downsampled inputs, filtering, and contact-map outputs.
+pre-downsampled inputs, filtering, thread counts, and contact-map outputs.
 
 ## Outputs
 

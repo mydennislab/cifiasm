@@ -116,6 +116,12 @@ def get_cifi_bam(wildcards):
 CALN50_JS = "scripts/calN50.js"
 
 # Tool settings
+def get_threads(section, default, key="threads"):
+    value = (config.get(section, {}) or {}).get(key, default)
+    if type(value) is not int or value < 1:
+        raise ValueError(f"{section}.{key} must be a positive integer")
+    return value
+
 HIFIASM_OPTS = config.get("hifiasm", {}) or {}
 HIFIASM_TELOMERE_MOTIF = HIFIASM_OPTS.get("telomere_motif", "CCCTAAA")
 if HIFIASM_TELOMERE_MOTIF is not None and not isinstance(HIFIASM_TELOMERE_MOTIF, str):
@@ -134,7 +140,7 @@ DIGEST_PE_EXT = ".fastq.gz" if CIFI_DIGEST_OPTS.get("gzip", False) else ".fastq"
 MAPPING_OPTS = config.get("mapping", {})
 MINIMAP2_PRESET = MAPPING_OPTS.get("minimap2_preset", "map-hifi")
 CONTACTS_MAPQ = int(MAPPING_OPTS.get("contacts_mapq", 1))
-# Sorting shares the mapping job's thread allocation.
+# Sorting uses up to four of the mapping job's threads.
 MAP_SORT_THREADS = 4
 
 # YaHS and contact maps use the same additional MAPQ threshold.

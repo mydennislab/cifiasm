@@ -55,17 +55,20 @@ cifi:
 
 # Assembly
 hifiasm:
+  threads: 64
   telomere_motif: "CCCTAAA" # 5'-end motif; null or "" omits --telo-m
 
 # Segment mapping and contact calling
 mapping:
+  threads: 20              # total for minimap2 and sorting per haplotype
+  contacts_threads: 4      # cifi contacts per haplotype
   minimap2_preset: map-hifi # do not change without benchmarking
   contacts_mapq: 0          # cifi contacts -q: min MAPQ for a segment to take part in a contact;
                             # MAPQ 0 alignments never reach yahs
 
 # Scaffolding uses contacts passing contacts_mapq; mapq: 0 applies no further
 # filter. Contig error correction is disabled by default for CiFi scaffolding.
-yahs:
+yahs:                     # single-threaded
   mapq: 0                   # yahs -q, applied on top of contacts_mapq
   contig_ec: false          # true: let yahs break contigs (Hi-C behaviour)
 

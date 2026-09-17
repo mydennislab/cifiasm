@@ -13,7 +13,7 @@ rule hifiasm_dual_scaf:
     params:
         pref=OUTDIR + "/asm/{sample}/{label}/{sample}.{label}.asm",
         telomere_args=["--telo-m", HIFIASM_TELOMERE_MOTIF] if HIFIASM_TELOMERE_MOTIF else []
-    threads: 64
+    threads: get_threads("hifiasm", 64)
     resources:
         mem_mb=300*1024, runtime=24 * 60, slurm_partition=SLURM_PARTITION, slurm_account=SLURM_ACCOUNT
     shell:
